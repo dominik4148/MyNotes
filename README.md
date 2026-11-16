@@ -12,7 +12,9 @@ Offline zápisník pro iPad (webová aplikace). Data se ukládají jen v iPadu.
 2. Sdílet → Přidat na plochu. Dál ji spouštěj z ikony na ploše.
 
 ## Aktualizace
-Po změně souborů zvyš číslo verze v `sw.js` (`zapisnik-v1` → `zapisnik-v2`), jinak iPad použije starou uloženou verzi.
+1. V repozitáři: Add file → Upload files, přetáhni znovu celý obsah složky (soubory se stejným názvem se přepíšou) a dej Commit changes.
+2. Při každé změně musí být v `sw.js` vyšší číslo verze (teď `zapisnik-v2`), jinak iPad použije starou uloženou verzi.
+3. Na iPadu aplikaci zavři a dvakrát po sobě otevři – nová verze naskočí při druhém otevření.
 
 ## Záloha
 Nastavení (ozubené kolo) → Vytvořit zálohu. Soubor `.zapisnik` si ulož do Souborů nebo na iCloud.

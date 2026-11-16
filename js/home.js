@@ -1,6 +1,6 @@
 'use strict';
 /* Úvodní stránka: vlevo strom složek, vpravo obsah vybrané složky. */
-const App = { folders: [], notebooks: [], cur: null, sort: 'name', search: '', selMode: false, sel: new Set(), settings: { pressure: true }, theme: { side: '#1e222b', main: '#0b0d12', accent: '#4a9eea' } };
+const App = { folders: [], notebooks: [], cur: null, sort: 'name', search: '', selMode: false, sel: new Set(), settings: { pressure: true, folderOrder: 'name' }, theme: { side: '#1e222b', main: '#0b0d12', accent: '#4a9eea' } };
 
 const Home = (() => {
   const THEMES = [
@@ -12,6 +12,8 @@ const Home = (() => {
   const folder = id => App.folders.find(f => f.id === id);
   const countDeep = id => nbsIn(id).length + kids(id).reduce((a, f) => a + countDeep(f.id), 0);
   const byName = (a, b) => a.name.localeCompare(b.name, 'cs', { numeric: true });
+  const customOrder = () => App.settings.folderOrder === 'custom';
+  const treeSort = (a, b) => customOrder() ? ((a.order ?? 1e9) - (b.order ?? 1e9)) || byName(a, b) : byName(a, b);
   const sorter = (a, b) => App.sort === 'name' ? byName(a, b) : App.sort === 'created' ? b.created - a.created : (b.modified || 0) - (a.modified || 0);
   const plural = (n, a, b, c) => `${n} ${n === 1 ? a : n > 1 && n < 5 ? b : c}`;
   function descendants(id) { return kids(id).flatMap(f => [f, ...descendants(f.id)]); }
@@ -31,9 +33,9 @@ const Home = (() => {
 
   /* ---------- strom ---------- */
   function treeRows(parent, depth) {
-    return kids(parent).sort(byName).flatMap(f => {
+    return kids(parent).sort(treeSort).flatMap(f => {
       const ch = kids(f.id), n = countDeep(f.id);
-      const row = el('div', { class: 'trow' + (App.cur === f.id && !App.search ? ' on' : ''), style: { marginLeft: depth * 22 + 'px' }, onclick: () => go(f.id) },
+      const row = el('div', { class: 'trow' + (App.cur === f.id && !App.search ? ' on' : ''), style: { marginLeft: depth * 22 + 'px' }, dataset: { id: f.id }, onpointerdown: e => lpStart(e, f), onclick: () => { if (!noClick) go(f.id); } },
         el('span', { class: 'tdot' }, el('i', { style: { background: f.color } })),
         el('span', { class: 'tname', text: f.name }),
         n ? el('span', { class: 'tcount', text: n }) : null,
@@ -46,6 +48,101 @@ const Home = (() => {
       el('div', { class: 'trow root' + (App.cur === null && !App.search ? ' on' : ''), onclick: () => go(null) }, el('span', { class: 'tdot', html: icon('note', 18) }), el('span', { class: 'tname', text: 'Všechny sešity' }), el('span', { class: 'tcount', text: App.notebooks.length || '' })),
       ...treeRows(null, 0),
       el('button', { class: 'tadd', html: icon('plus', 18) + '<span>Nová složka</span>', onclick: () => newFolder(null) }));
+  }
+
+  /* ---------- podržení složky: nabídka, a když se prst pohne, přesouvání ---------- */
+  let lp = null, noClick = false;
+  function lpClear() {
+    if (!lp) return;
+    clearTimeout(lp.timer);
+    document.removeEventListener('pointermove', lpMove); document.removeEventListener('pointerup', lpUp); document.removeEventListener('pointercancel', lpCancel);
+    if (lp.ghost) lp.ghost.remove();
+    $('#dropline').hidden = true;
+    $$('#tree .trow').forEach(r => r.classList.remove('held', 'drop', 'dragging'));
+    lp = null;
+  }
+  function lpStart(e, f) {
+    if (e.button || e.target.closest('.tchev')) return;
+    lpClear();
+    const row = e.currentTarget;
+    lp = { f, row, x: e.clientX, y: e.clientY, id: e.pointerId, armed: false, drag: false, target: null };
+    lp.timer = setTimeout(() => {
+      if (!lp) return;
+      lp.armed = true; noClick = true; row.classList.add('held');
+      showMenu(row, [{ icon: 'edit', label: 'Přejmenovat', action: () => renameFolder(f) }, { icon: 'trash', label: 'Smazat', danger: true, action: () => deleteItems([f], []) }], { above: true });
+    }, 480);
+    document.addEventListener('pointermove', lpMove); document.addEventListener('pointerup', lpUp); document.addEventListener('pointercancel', lpCancel);
+  }
+  function lpMove(e) {
+    if (!lp || e.pointerId !== lp.id) return;
+    const d = Math.hypot(e.clientX - lp.x, e.clientY - lp.y);
+    if (!lp.armed) { if (d > 9) lpClear(); return; }
+    if (!lp.drag) {
+      if (d < 10) return;
+      lp.drag = true; closePop();
+      lp.row.classList.remove('held'); lp.row.classList.add('dragging');
+      lp.ghost = el('div', { class: 'dragghost' }, el('i', { class: 'mvdot', style: { background: lp.f.color } }), lp.f.name);
+      document.body.append(lp.ghost);
+      lp.banned = new Set([lp.f.id, ...descendants(lp.f.id).map(x => x.id)]);
+    }
+    lp.ghost.style.transform = `translate(${e.clientX + 14}px,${e.clientY - 22}px)`;
+    const tree = $('#tree'), tr = tree.getBoundingClientRect();
+    if (e.clientY < tr.top + 44) tree.scrollTop -= 12; else if (e.clientY > tr.bottom - 44) tree.scrollTop += 12;
+    lpTarget(e.clientX, e.clientY);
+  }
+  function lpTarget(x, y) {
+    const rows = $$('#tree .trow'), line = $('#dropline'), sr = $('#side').getBoundingClientRect();
+    rows.forEach(r => r.classList.remove('drop'));
+    line.hidden = true; lp.target = null;
+    if (x < sr.left || x > sr.right) return;
+    const lineAt = (yy, left) => { line.hidden = false; line.style.top = yy - 1.5 + 'px'; line.style.left = left + 'px'; line.style.width = Math.max(40, sr.right - left - 16) + 'px'; };
+    let hit = null;
+    for (const r of rows) { const b = r.getBoundingClientRect(); if (y >= b.top - 2 && y <= b.bottom + 2) { hit = [r, b]; break; } }
+    if (!hit) { // pod posledním řádkem = hlavní úroveň
+      const last = rows[rows.length - 1].getBoundingClientRect();
+      if (y > last.bottom) { lp.target = { mode: 'root' }; lineAt(last.bottom + 3, rows[0].getBoundingClientRect().left); }
+      return;
+    }
+    const [r, b] = hit, id = r.dataset.id;
+    if (!id) { lp.target = { mode: 'root' }; r.classList.add('drop'); return; }
+    if (lp.banned.has(id)) return;
+    const fr = (y - b.top) / b.height, tf = folder(id), open = !tf.collapsed && kids(id).some(k => !lp.banned.has(k.id));
+    if (fr < 0.26) { lp.target = { mode: 'before', id }; lineAt(b.top - 2, b.left); }
+    else if (fr > 0.74 && !open) { lp.target = { mode: 'after', id }; lineAt(b.bottom + 2, b.left); }
+    else { lp.target = { mode: 'into', id }; r.classList.add('drop'); }
+  }
+  function lpUp(e) {
+    if (!lp || e.pointerId !== lp.id) return;
+    const { f, target, drag } = lp;
+    lpClear();
+    setTimeout(() => { noClick = false; }, 350);
+    if (drag && target) dropFolder(f, target);
+  }
+  function lpCancel(e) { if (lp && e.pointerId === lp.id) { lpClear(); setTimeout(() => { noClick = false; }, 350); } }
+  async function dropFolder(f, t) {
+    const ref = t.mode === 'before' || t.mode === 'after' ? folder(t.id) : null;
+    const parent = t.mode === 'into' ? t.id : ref ? (ref.parent || null) : null;
+    f.parent = parent; f.modified = Date.now();
+    if (customOrder()) {
+      const sibs = kids(parent).filter(x => x !== f).sort(treeSort);
+      sibs.splice(ref ? sibs.indexOf(ref) + (t.mode === 'after' ? 1 : 0) : sibs.length, 0, f);
+      sibs.forEach((x, i) => { x.order = i; });
+      await DB.putMany('folders', sibs);
+    } else await DB.put('folders', f);
+    const p = parent && folder(parent);
+    if (p && p.collapsed) { p.collapsed = false; await DB.put('folders', p); }
+    render();
+  }
+  async function setFolderOrder(k) {
+    if (k === 'custom' && !customOrder()) { // vlastní pořadí začne ze současného abecedního
+      const groups = new Map();
+      for (const f of App.folders) { const key = f.parent || ''; if (!groups.has(key)) groups.set(key, []); groups.get(key).push(f); }
+      for (const g of groups.values()) g.sort(byName).forEach((f, i) => { f.order = i; });
+      await DB.putMany('folders', App.folders);
+    }
+    App.settings.folderOrder = k;
+    await DB.kvSet('settings', App.settings);
+    render();
   }
 
   /* ---------- obsah ---------- */
@@ -124,7 +221,7 @@ const Home = (() => {
   async function newFolder(parent) {
     const name = await dlgPrompt(parent ? 'Nová podsložka' : 'Nová složka', '', 'Vytvořit');
     if (!name) return;
-    const f = { id: uid(), parent: parent || null, name, color: PALETTE20[5 + (App.folders.length * 3) % 14], created: Date.now(), modified: Date.now(), collapsed: false };
+    const f = { id: uid(), parent: parent || null, name, color: PALETTE20[5 + (App.folders.length * 3) % 14], created: Date.now(), modified: Date.now(), collapsed: false, order: kids(parent || null).length };
     await DB.put('folders', f); App.folders.push(f);
     if (parent) { const p = folder(parent); if (p && p.collapsed) { p.collapsed = false; DB.put('folders', p); } }
     render();
@@ -216,11 +313,17 @@ const Home = (() => {
     };
     const stat = el('p', { class: 'hint', text: est ? `Využito ${fmtSize(est.usage || 0)} z dostupných ${fmtSize(est.quota || 0)}. Trvalé úložiště: ${pers ? 'zapnuto' : 'zatím ne'}.` : 'Velikost úložiště nejde zjistit.' });
     const prog = el('p', { class: 'hint' });
+    const segF = el('div', { class: 'seg' });
+    const paintSeg = () => segF.replaceChildren(...[['name', 'Podle abecedy'], ['custom', 'Vlastní pořadí']].map(([k, label]) =>
+      el('button', { class: 'segb' + ((App.settings.folderOrder || 'name') === k ? ' on' : ''), text: label, onclick: async () => { await setFolderOrder(k); paintSeg(); } })));
+    paintSeg();
     const body = el('div', { class: 'settings' },
       el('h4', { text: 'Vzhled' }),
       el('div', { class: 'themes' }, THEMES.map(([n, s, m, a]) => el('button', { class: 'theme', onclick: () => { App.theme = { side: s, main: m, accent: a }; saveTheme(); $$('.crow input').forEach((x, i) => x.value = [s, m, a][i]); } },
         el('span', { class: 'tprev', style: { background: `linear-gradient(90deg, ${s} 0 38%, ${m} 38%)` } }, el('i', { style: { background: a } })), el('span', { text: n })))),
       cin('Boční panel a pozadí za papírem', 'side'), cin('Hlavní plocha', 'main'), cin('Zvýraznění (tlačítka)', 'accent'),
+      el('h4', { text: 'Složky v levém panelu' }), segF,
+      el('p', { class: 'hint', text: 'Podrž prst na složce: objeví se Přejmenovat a Smazat. Když prst nepustíš a potáhneš, složku přesuneš do jiné složky nebo ven. Při vlastním pořadí si tažením určíš i pořadí složek.' }),
       el('h4', { text: 'Pero' }),
       el('label', { class: 'crow' }, el('span', { text: 'Tloušťka čáry podle přítlaku tužky' }), el('input', { type: 'checkbox', class: 'sw-check', checked: App.settings.pressure, onchange: e => { App.settings.pressure = e.target.checked; DB.kvSet('settings', App.settings); } })),
       el('h4', { text: 'Úložiště' }), stat,
@@ -247,12 +350,14 @@ const Home = (() => {
   async function load() {
     App.folders = await DB.all('folders'); App.notebooks = await DB.all('notebooks');
     App.theme = Object.assign({}, App.theme, await DB.kvGet('theme', {}));
-    App.settings = Object.assign({ pressure: true }, await DB.kvGet('settings', {}));
+    App.settings = Object.assign({ pressure: true, folderOrder: 'name' }, await DB.kvGet('settings', {}));
     App.sort = await DB.kvGet('sort', 'name');
   }
   async function refresh() { App.notebooks = await DB.all('notebooks'); render(); }
   function init() {
     $('#b-settings').onclick = settings;
+    $('#tree').addEventListener('touchmove', e => { if (lp && lp.armed && e.cancelable) e.preventDefault(); }, { passive: false }); // při tažení složky se panel neposouvá
+    $('#tree').addEventListener('contextmenu', e => e.preventDefault());
     $('#search').addEventListener('input', e => { App.search = e.target.value.trim(); render(); });
     $('#b-sort').onclick = e => showMenu(e.currentTarget, [['name', 'Podle názvu'], ['created', 'Podle data vytvoření'], ['modified', 'Podle poslední úpravy']].map(([k, label]) =>
       ({ icon: App.sort === k ? 'check' : null, label, action: () => { App.sort = k; DB.kvSet('sort', k); render(); } })), { align: 'right' });

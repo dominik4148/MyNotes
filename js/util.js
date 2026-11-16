@@ -79,6 +79,8 @@ const ICONS = {
   ret: '<path d="M9 15L4 10l5-5M4 10h9a6 6 0 016 6v3"/>',
   expand: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
   print: '<path d="M7 8V3h10v5M7 17H5a2 2 0 01-2-2v-5a2 2 0 012-2h14a2 2 0 012 2v5a2 2 0 01-2 2h-2M7 14h10v7H7z"/>',
+  erWhole: '<path d="M16.5 13H10l-3.6-3.6a1.3 1.3 0 010-1.8l4.6-4.6a1.3 1.3 0 011.8 0l4.4 4.4a1.3 1.3 0 010 1.8L13 13M9 7l4.5 4.5"/><path d="M2.5 19.5c2.2-2.6 4-2.6 6.3 0s4.1 2.6 6.4 0 4.1-2.6 6.3 0"/>',
+  palette: `<path d="M12 3a9 9 0 100 18c1.1 0 1.8-.8 1.8-1.7 0-.5-.2-.9-.5-1.2-.3-.3-.5-.7-.5-1.2 0-1 .8-1.8 1.8-1.8H17a4 4 0 004-4c0-4.5-4-8.1-9-8.1z"/><circle cx="7.5" cy="11.5" r="1.2" ${F}/><circle cx="10" cy="7.5" r="1.2" ${F}/><circle cx="14.5" cy="7.2" r="1.2" ${F}/><circle cx="17.3" cy="10.6" r="1.2" ${F}/>`,
   line0: '<path d="M3 12h18"/>',
   line1: '<path d="M3 12h4M10 12h4M17 12h4"/>',
   line2: `<circle cx="4" cy="12" r="1.2" ${F}/><circle cx="9.3" cy="12" r="1.2" ${F}/><circle cx="14.6" cy="12" r="1.2" ${F}/><circle cx="20" cy="12" r="1.2" ${F}/>`,
@@ -133,7 +135,7 @@ function showPop(anchor, content, opts = {}) {
   const r = anchor.getBoundingClientRect ? anchor.getBoundingClientRect() : { left: anchor.x, right: anchor.x, top: anchor.y, bottom: anchor.y, width: 0 };
   const pw = p.offsetWidth, ph = p.offsetHeight, W = innerWidth, H = innerHeight;
   let x = opts.align === 'right' ? r.right - pw : opts.align === 'center' ? r.left + r.width / 2 - pw / 2 : r.left;
-  let y = r.bottom + 8;
+  let y = opts.above && r.top - ph - 8 >= 8 ? r.top - ph - 8 : r.bottom + 8;
   if (y + ph > H - 8) y = Math.max(8, r.top - ph - 8);
   p.style.left = clamp(x, 8, Math.max(8, W - pw - 8)) + 'px';
   p.style.top = y + 'px';

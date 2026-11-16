@@ -1,7 +1,7 @@
 /* Offline režim: všechny soubory aplikace se uloží do mezipaměti. Při změně aplikace zvyš číslo verze. */
-const VER = 'zapisnik-v1';
+const VER = 'zapisnik-v2';
 const FILES = ['./', 'index.html', 'app.css', 'manifest.webmanifest', 'icon-180.png', 'icon-512.png',
-  'js/util.js', 'js/db.js', 'js/geom.js', 'js/text.js', 'js/render.js', 'js/pdfio.js', 'js/home.js', 'js/editor.js', 'js/main.js',
+  'js/util.js', 'js/db.js', 'js/geom.js', 'js/shapes.js', 'js/text.js', 'js/render.js', 'js/pdfio.js', 'js/home.js', 'js/editor.js', 'js/main.js',
   'lib/pdf-lib.min.js', 'lib/pdf.min.js', 'lib/pdf.worker.min.js'];
 self.addEventListener('install', e => e.waitUntil(caches.open(VER).then(c => c.addAll(FILES)).then(() => self.skipWaiting())));
 self.addEventListener('activate', e => e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== VER).map(k => caches.delete(k)))).then(() => self.clients.claim())));

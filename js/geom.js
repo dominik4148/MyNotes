@@ -120,6 +120,22 @@ function subOutline(c, X, Y, R, a, b) {
   }
   c.push(4);
 }
+/* rovné úseky (rozpoznané tvary) – bez vyhlazování, rohy zůstanou ostré */
+function polyCmds(X, Y) {
+  const n = X.length, c = [0, r2(X[0]), r2(Y[0])];
+  if (n === 1) { c.push(1, r2(X[0] + 0.02), r2(Y[0])); return c; }
+  const closed = n > 3 && Math.abs(X[0] - X[n - 1]) < 0.07 && Math.abs(Y[0] - Y[n - 1]) < 0.07;
+  for (let i = 1; i < (closed ? n - 1 : n); i++) c.push(1, r2(X[i]), r2(Y[i]));
+  if (closed) c.push(4);
+  return c;
+}
+/* hladká uzavřená křivka (kruh, elipsa); poslední bod opakuje první */
+function closedCmds(X, Y) {
+  const n = X.length - 1, c = [0, r2((X[0] + X[1]) / 2), r2((Y[0] + Y[1]) / 2)];
+  for (let i = 1; i <= n; i++) { const a = i % n, b = (i + 1) % n; c.push(2, r2(X[a]), r2(Y[a]), r2((X[a] + X[b]) / 2), r2((Y[a] + Y[b]) / 2)); }
+  c.push(4);
+  return c;
+}
 function outlineCmds(X, Y, P, w) {
   const n = X.length, R = new Array(n), c = [];
   for (let i = 0; i < n; i++) R[i] = (w / 2) * (0.55 + 0.9 * Math.sqrt(P[i]));
@@ -141,9 +157,14 @@ function strokeGeom(it) {
   const d0 = decPts(it);
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   for (let i = 0; i < d0.n; i++) { x0 = Math.min(x0, d0.X[i]); y0 = Math.min(y0, d0.Y[i]); x1 = Math.max(x1, d0.X[i]); y1 = Math.max(y1, d0.Y[i]); }
-  const fill = it.k === 'p' && it.pr && !it.d;
-  const d = densify(d0.X, d0.Y, d0.P, Math.max(0.8, it.w * 0.75));
-  const cmds = fill ? outlineCmds(d.X, d.Y, d.P, it.w) : centerCmds(d.X, d.Y);
+  const fill = it.k === 'p' && it.pr && !it.d && !it.sp;
+  let cmds;
+  if (it.sp && Shapes.STRAIGHT[it.sp]) cmds = polyCmds(d0.X, d0.Y);
+  else if (it.sp === 'ell' && d0.n > 8) cmds = closedCmds(d0.X, d0.Y);
+  else {
+    const d = densify(d0.X, d0.Y, d0.P, Math.max(0.8, it.w * 0.75));
+    cmds = fill ? outlineCmds(d.X, d.Y, d.P, it.w) : centerCmds(d.X, d.Y);
+  }
   const m = it.w * (fill ? 0.8 : 0.5) + 0.5;
   g = { cmds, fill, bbox: [x0 - m, y0 - m, x1 + m, y1 + m], path: null };
   _geo.set(it, g);
@@ -306,5 +327,9 @@ function eraseStroke(it, cx, cy, R) {
   }
   close();
   if (!changed) return null;
-  return runs.map(r => ({ ...it, id: uid(), pts: encPts(r) }));
+  return runs.map(r => {
+    const n = { ...it, id: uid(), pts: encPts(r) };
+    if (it.sp === 'ell' || it.sp === 'par') delete n.sp; else if (it.sp && it.sp !== 'line') n.sp = 'poly';
+    return n;
+  });
 }

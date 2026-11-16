@@ -7,7 +7,7 @@ const Editor = (() => {
   const DEF_TOOLS = {
     pen: { colors: ['#00783a', '#ee3524', '#f5c60e', '#5f2c91', '#111111', '#0a6cf5', '#8a8a8a', '#f08a24'], ci: 4, custom: null, widths: [0.8, 1.4, 2.2, 3.5], wi: 1, dash: 0 },
     hl: { colors: ['#fff176', '#b9f6a5', '#ffb3d1', '#a5d8ff', '#ffd08a', '#d9b8ff', '#a7f3ee', '#d9d9d9'], ci: 0, custom: null, widths: [6, 12, 18, 26], wi: 1, dash: 0 },
-    er: { sizes: [6, 14, 30], si: 1, auto: false },
+    er: { sizes: [6, 14, 30], si: 1, auto: false, whole: false },
     sel: { mode: 'box' },
     txt: { font: Txt.FONTS[0][1], size: 14, color: '#111111' },
   };
@@ -137,7 +137,7 @@ const Editor = (() => {
       lctx.save();
       clipPages(lctx, visible().map(i => E.pages[i]));
       pageTf(lctx, a.page);
-      Render.drawItem(lctx, { t: 's', k: a.k, c: a.c, w: a.w, d: a.d, pr: a.pr, pts: encPts(a.raw) }, dark);
+      Render.drawItem(lctx, a.shape ? shapeItem(a) : { t: 's', k: a.k, c: a.c, w: a.w, d: a.d, pr: a.pr, pts: encPts(a.raw) }, dark);
       lctx.restore();
     } else if (a.type === 'erase') {
       lctx.beginPath(); lctx.arc(a.sx, a.sy, Math.max(3, a.R * v.s), 0, 7);
@@ -147,14 +147,15 @@ const Editor = (() => {
       lctx.strokeStyle = '#3d8fe6'; lctx.lineWidth = 1.5; lctx.setLineDash([6, 5]);
       lctx.fillStyle = 'rgba(61,143,230,.07)';
       lctx.beginPath();
-      if (a.type === 'textbox' || a.mode === 'box') lctx.rect(Math.min(a.x0, a.x1), Math.min(a.y0, a.y1), Math.abs(a.x1 - a.x0), Math.abs(a.y1 - a.y0));
-      else { a.pts.forEach((p, i) => i ? lctx.lineTo(p[0], p[1]) : lctx.moveTo(p[0], p[1])); lctx.closePath(); }
-      lctx.fill(); lctx.stroke(); lctx.setLineDash([]);
+      if (a.type === 'textbox' || a.mode === 'box') { lctx.rect(Math.min(a.x0, a.x1), Math.min(a.y0, a.y1), Math.abs(a.x1 - a.x0), Math.abs(a.y1 - a.y0)); lctx.fill(); }
+      else a.pts.forEach((p, i) => i ? lctx.lineTo(p[0], p[1]) : lctx.moveTo(p[0], p[1])); // volný výběr: jen čára, uzavře se až po zvednutí
+      lctx.stroke(); lctx.setLineDash([]);
     } else if (a.type === 'xform' && a.moved) {
       lctx.save();
       clipPages(lctx, E.pages);
       const M = a.M;
       for (const { page, it } of a.items) {
+        if (a.preview) { pageTf(lctx, page); Render.drawItem(lctx, a.preview, isDark(page)); continue; }
         lctx.setTransform(d * v.s, 0, 0, d * v.s, d * v.tx, d * v.ty);
         lctx.transform(M[0], M[1], M[2], M[3], M[4], M[5]);
         lctx.translate(-page._w / 2, page._y);
@@ -168,14 +169,23 @@ const Editor = (() => {
   const dirty = new Set();
   let saveT = 0;
   function flushSave() {
-    clearTimeout(saveT); saveT = 0;
+    clearTimeout(saveT); saveT = 0; firstDirty = 0;
     const ps = Array.from(dirty).filter(p => E.pages.includes(p));
     dirty.clear();
     const jobs = [DB.savePages(ps)];
     if (E.nbDirty) { E.nbDirty = false; E.nb.pageIds = E.pages.map(p => p.id); jobs.push(DB.put('notebooks', E.nb)); }
     return Promise.all(jobs).catch(e => { console.error(e); toast('Pozor: uložení se nepovedlo (' + e.message + ')'); });
   }
-  function markDirty(p) { if (p) dirty.add(p); E.changed = true; E.nbDirty = true; E.nb.modified = Date.now(); if (!saveT) saveT = setTimeout(flushSave, 500); }
+  let firstDirty = 0;
+  function saveTick() { if (penId != null) { saveT = setTimeout(saveTick, 400); return; } flushSave(); }
+  function markDirty(p) {
+    if (p) dirty.add(p);
+    E.changed = true; E.nbDirty = true; E.nb.modified = Date.now();
+    const now = performance.now();
+    if (!firstDirty) firstDirty = now;
+    clearTimeout(saveT);
+    saveT = setTimeout(saveTick, now - firstDirty > 6000 ? 250 : 1000);
+  }
   function txBegin() { if (E.tx) txCommit(); E.tx = { order: E.pages.slice(), pages: new Map() }; }
   function touch(p) { if (!E.tx.pages.has(p)) E.tx.pages.set(p, p.items); }
   function txCommit() {
@@ -275,6 +285,8 @@ const Editor = (() => {
     row.push(sep());
     row.push(el('button', { class: 'chip' + (t.auto ? ' on' : ''), html: icon('ret', 18) + '<span>Jednou</span>', title: 'Po zvednutí tužky se vrátí předchozí nástroj', onclick: () => { t.auto = true; saveTools(); renderSub(); } }));
     row.push(el('button', { class: 'chip' + (!t.auto ? ' on' : ''), html: icon('lock', 18) + '<span>Držet</span>', title: 'Guma zůstane, dokud nezvolíš jiný nástroj', onclick: () => { t.auto = false; saveTools(); renderSub(); } }));
+    row.push(sep());
+    row.push(el('button', { class: 'sbtn tog' + (t.whole ? ' on' : ''), title: 'Mazat celý tah najednou', 'aria-label': 'Mazat celý tah najednou', html: icon('erWhole', 24), onclick: () => { t.whole = !t.whole; saveTools(); renderSub(); } }));
     return row;
   }
   function subSelect() {
@@ -317,16 +329,22 @@ const Editor = (() => {
   function calcFrame() {
     const L = selItems();
     if (!L.length) { E.sel = null; return; }
-    E.sel.list = L.map(x => ({ page: x.page, id: x.it.id }));
+    const s = E.sel;
+    s.list = L.map(x => ({ page: x.page, id: x.it.id }));
+    s.single = null; s.shape = null; s.line = null; s.mid = false; s.locked = false;
     if (L.length === 1 && L[0].it.t !== 's') {
-      const { page, it } = L[0], [ox, oy] = origin(page), [w, h] = boxSize(it), c = Math.cos(it.r || 0), s = Math.sin(it.r || 0);
-      E.sel.frame = { cx: ox + it.x + w / 2 * c - h / 2 * s, cy: oy + it.y + w / 2 * s + h / 2 * c, w, h, r: it.r || 0 };
-      E.sel.single = it; E.sel.locked = !!it.locked;
+      const { page, it } = L[0], [ox, oy] = origin(page), [w, h] = boxSize(it), c = Math.cos(it.r || 0), sn = Math.sin(it.r || 0);
+      s.frame = { cx: ox + it.x + w / 2 * c - h / 2 * sn, cy: oy + it.y + w / 2 * sn + h / 2 * c, w, h, r: it.r || 0 };
+      s.single = it; s.locked = !!it.locked;
     } else {
       let b = [Infinity, Infinity, -Infinity, -Infinity];
       for (const { page, it } of L) { const [ox, oy] = origin(page), q = itemBBox(it); b = [Math.min(b[0], q[0] + ox), Math.min(b[1], q[1] + oy), Math.max(b[2], q[2] + ox), Math.max(b[3], q[3] + oy)]; }
-      E.sel.frame = { cx: (b[0] + b[2]) / 2, cy: (b[1] + b[3]) / 2, w: b[2] - b[0], h: b[3] - b[1], r: 0 };
-      E.sel.single = null; E.sel.locked = false;
+      s.frame = { cx: (b[0] + b[2]) / 2, cy: (b[1] + b[3]) / 2, w: b[2] - b[0], h: b[3] - b[1], r: 0 };
+      if (L.length === 1 && L[0].it.sp) { // rozpoznaný tvar: chová se jako obrázek
+        const { page, it } = L[0], [ox, oy] = origin(page), p = it.pts;
+        s.shape = it; s.locked = !!it.locked; s.mid = it.sp === 'ell';
+        if ((it.sp === 'line' || it.sp === 'arrow') && p.length >= 6) s.line = [[p[0] / PQ + ox, p[1] / PQ + oy], [p[3] / PQ + ox, p[4] / PQ + oy]];
+      }
     }
   }
   function setSel(list, menu) {
@@ -342,12 +360,21 @@ const Editor = (() => {
   const PAD = 7;
   function selHit(sx, sy) {
     if (!E.sel) return null;
-    const f = E.sel.frame, v = E.view, dx = sx - (f.cx * v.s + v.tx), dy = sy - (f.cy * v.s + v.ty);
-    const c = Math.cos(-f.r), s = Math.sin(-f.r), lx = dx * c - dy * s, ly = dx * s + dy * c;
+    const s = E.sel, f = s.frame, v = E.view;
+    if (s.line) { // přímka a šipka: bod na každém konci
+      const [a, b] = s.line.map(p => [p[0] * v.s + v.tx, p[1] * v.s + v.ty]);
+      if (!s.locked) {
+        if (Math.hypot(sx - b[0], sy - b[1]) < 22) return { type: 'end', i: 1 };
+        if (Math.hypot(sx - a[0], sy - a[1]) < 22) return { type: 'end', i: 0 };
+      }
+      return distSeg(sx, sy, a[0], a[1], b[0], b[1]) < 20 ? { type: 'move' } : null;
+    }
+    const dx = sx - (f.cx * v.s + v.tx), dy = sy - (f.cy * v.s + v.ty);
+    const c = Math.cos(-f.r), sn = Math.sin(-f.r), lx = dx * c - dy * sn, ly = dx * sn + dy * c;
     const hw = f.w * v.s / 2 + PAD, hh = f.h * v.s / 2 + PAD;
-    if (!E.sel.locked) {
+    if (!s.locked) {
       if (Math.hypot(lx - (hw + 34), ly) < 22) return { type: 'rotate' };
-      for (const [ax, ay] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) if (Math.hypot(lx - ax * hw, ly - ay * hh) < 20) return { type: 'scale', ax, ay };
+      for (const [ax, ay] of s.mid ? [[0, -1], [1, 0], [0, 1], [-1, 0]] : [[-1, -1], [1, -1], [1, 1], [-1, 1]]) if (Math.hypot(lx - ax * hw, ly - ay * hh) < 20) return { type: 'scale', ax, ay };
     }
     return Math.abs(lx) <= hw && Math.abs(ly) <= hh ? { type: 'move' } : null;
   }
@@ -366,6 +393,13 @@ const Editor = (() => {
       a.moved = true; closePop();
       a.items.forEach(x => E.hide.add(x.it.id));
       render();
+    }
+    if (a.hit.type === 'end') { // tažení za konec přímky: druhý konec zůstává na místě
+      const { page, it } = a.items[0], [ox, oy] = origin(page), p = it.pts;
+      const fix = a.hit.i ? [p[0] / PQ, p[1] / PQ] : [p[3] / PQ, p[4] / PQ], mv = Shapes.snapHV(fix, [wx - ox, wy - oy]);
+      a.preview = { ...it, pts: encPts(Shapes.points({ kind: it.sp, a: a.hit.i ? fix : mv, b: a.hit.i ? mv : fix, w: it.w })) };
+      requestLive(); updateOverlay();
+      return;
     }
     if (a.hit.type === 'move') a.M = matT(wx - a.wx, wy - a.wy);
     else if (a.hit.type === 'scale') a.M = matAbout(a.ax, a.ay, clamp(Math.hypot(wx - a.ax, wy - a.ay) / Math.max(1e-3, Math.hypot(a.wx - a.ax, a.wy - a.ay)), 0.05, 30), 0);
@@ -386,6 +420,14 @@ const Editor = (() => {
     const a = E.act; E.act = null;
     if (!a.moved) { if (E.sel) { E.sel.menu = !E.sel.menu; updateOverlay(); } return; }
     a.items.forEach(x => E.hide.delete(x.it.id));
+    if (a.preview) {
+      const { page, it } = a.items[0];
+      txBegin(); touch(page); page.items = page.items.map(i => i.id === it.id ? a.preview : i); txCommit();
+      E.sel.menu = true; calcFrame();
+      lctx.setTransform(1, 0, 0, 1, 0, 0); lctx.clearRect(0, 0, live.width, live.height);
+      render(); updateOverlay();
+      return;
+    }
     const M = a.M, moves = [];
     applyToSel((it, p) => {
       const [ox, oy] = origin(p);
@@ -419,7 +461,7 @@ const Editor = (() => {
     const [ox, oy] = origin(p), tol = 7 / E.view.s;
     for (let i = p.items.length - 1; i >= 0; i--) {
       const it = p.items[i];
-      if (it.t === 's' && !strokes) continue;
+      if (it.t === 's' && (!strokes || (strokes === 'sp' && !it.sp))) continue;
       if (itemHitsPoint(it, wx - ox, wy - oy, tol)) return { page: p, id: it.id };
     }
     return null;
@@ -487,6 +529,9 @@ const Editor = (() => {
     const tb = (label, fn, cls = '') => el('button', { class: 'smb ' + cls, text: label, onclick: fn });
     const ib = (ic, title, fn, cls = '') => el('button', { class: 'smi ' + cls, title, html: icon(ic, 24), onclick: fn });
     if (s.locked) return [ib('lock', 'Odemknout', () => selLock(false), 'blue')];
+    if (s.shape) return [
+      ib('palette', 'Styl čáry', e => stylePanel(e.currentTarget)), ib('dup', 'Duplikovat', selDuplicate), ib('cut', 'Vyjmout', () => { selCopy(); selDelete(); }), ib('copy', 'Kopírovat', selCopy),
+      ib('unlock', 'Zamknout', () => selLock(true)), ib('front', 'Přenést dopředu', () => selOrder(true)), ib('backw', 'Poslat dozadu', () => selOrder(false)), ib('trash', 'Smazat', selDelete, 'red')];
     if (single && single.t === 'i') return [
       ib('crop', 'Oříznout', enterCrop), ib('dup', 'Duplikovat', selDuplicate), ib('cut', 'Vyjmout', () => { selCopy(); selDelete(); }), ib('copy', 'Kopírovat', selCopy),
       ib('unlock', 'Zamknout', () => selLock(true)), ib('front', 'Přenést dopředu', () => selOrder(true)), ib('backw', 'Poslat dozadu', () => selOrder(false)), ib('trash', 'Smazat', selDelete, 'red')];
@@ -612,17 +657,22 @@ const Editor = (() => {
   function updateOverlay() {
     if (!E.open) return;
     const v = E.view, fr = $('#selframe'), menu = $('#selmenu');
+    const d1 = $('#lh1'), d2 = $('#lh2');
     if (E.sel) {
-      const f = E.sel.frame, W = f.w * v.s + PAD * 2, H = f.h * v.s + PAD * 2, cx = f.cx * v.s + v.tx, cy = f.cy * v.s + v.ty;
-      fr.hidden = false;
-      fr.classList.toggle('locked', !!E.sel.locked);
+      const s = E.sel, f = s.frame, W = f.w * v.s + PAD * 2, H = f.h * v.s + PAD * 2, cx = f.cx * v.s + v.tx, cy = f.cy * v.s + v.ty;
+      const moving = E.act && E.act.type === 'xform' && E.act.moved;
+      fr.hidden = !!s.line && !s.locked;
+      fr.classList.toggle('locked', !!s.locked);
+      fr.classList.toggle('mid', !!s.mid);
       fr.style.width = W + 'px'; fr.style.height = H + 'px';
       fr.style.transform = `translate(${cx - W / 2}px,${cy - H / 2}px) rotate(${f.r}rad)`;
-      const moving = E.act && E.act.type === 'xform' && E.act.moved;
-      if (E.sel.menu && !moving) {
-        if (menu._for !== E.sel || menu._clip !== !!clip || menu._lock !== E.sel.locked || menu._single !== E.sel.single) {
+      const dots = !!s.line && !s.locked && !moving;
+      d1.hidden = d2.hidden = !dots;
+      if (dots) [d1, d2].forEach((d, i) => { d.style.transform = `translate(${s.line[i][0] * v.s + v.tx - 8}px,${s.line[i][1] * v.s + v.ty - 8}px)`; });
+      if (s.menu && !moving) {
+        if (menu._for !== s || menu._clip !== !!clip || menu._lock !== s.locked || menu._single !== s.single || menu._shape !== !!s.shape) {
           menu.replaceChildren(...selMenu().filter(Boolean));
-          menu._for = E.sel; menu._clip = !!clip; menu._lock = E.sel.locked; menu._single = E.sel.single;
+          menu._for = s; menu._clip = !!clip; menu._lock = s.locked; menu._single = s.single; menu._shape = !!s.shape;
         }
         menu.hidden = false;
         const ext = Math.abs(Math.sin(f.r)) * W / 2 + Math.abs(Math.cos(f.r)) * H / 2, mw = menu.offsetWidth, mh = menu.offsetHeight;
@@ -630,7 +680,7 @@ const Editor = (() => {
         if (y < TOP_M + 4) y = Math.min(cy + ext + 16, E.vh - mh - 12);
         menu.style.transform = `translate(${clamp(cx - mw / 2, 8, E.vw - mw - 8)}px,${Math.max(8, y)}px)`;
       } else menu.hidden = true;
-    } else { fr.hidden = true; menu.hidden = true; menu._for = null; }
+    } else { fr.hidden = true; menu.hidden = true; menu._for = null; d1.hidden = d2.hidden = true; }
     if (E.txt) {
       const { it, page, wrap } = E.txt, [ox, oy] = origin(page);
       wrap.style.transform = `translate(${(ox + it.x) * v.s + v.tx}px,${(oy + it.y) * v.s + v.ty}px) rotate(${it.r}rad) scale(${v.s * it.sc})`;
@@ -657,12 +707,17 @@ const Editor = (() => {
   const touches = new Map();
   let penId = null, gest = null, inertia = 0;
   const xy = e => [e.clientX, e.clientY];
+  let lastPen = -1e9; // kdy se naposledy psalo tužkou – krátce potom se dotyky (dlaň) ignorují
+  function endTouchGesture() {
+    if (gest && gest.mode === 'sel' && E.act && E.act.type === 'xform') xformEnd();
+    touches.clear(); gest = null;
+  }
   function onDown(e) {
     if (e.target.closest('.txt-wrap')) return;
     cancelAnimationFrame(inertia);
     if (e.pointerType === 'touch') {
-      if (penId != null) return;
-      stage.setPointerCapture(e.pointerId);
+      if (penId != null || performance.now() - lastPen < 350) return;
+      try { stage.setPointerCapture(e.pointerId); } catch (err) { }
       touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
       if (touches.size === 1) {
         gest = { t0: performance.now(), max: 1, moved: false, sx: e.clientX, sy: e.clientY, vx: 0, vy: 0, lt: performance.now(), mode: 'pan' };
@@ -678,11 +733,13 @@ const Editor = (() => {
       }
       return;
     }
-    if (e.button || penId != null) return;
+    if (e.button) return;
     e.preventDefault();
-    if (touches.size) { touches.clear(); gest = null; }
-    if (E.act && E.act.type === 'xform') return;
-    penId = e.pointerId; stage.setPointerCapture(e.pointerId);
+    lastPen = performance.now();
+    if (penId != null) penFinish();                 // předchozí tah nedostal „zvednutí“ – dokončí se a nový hned začne
+    if (touches.size || gest) endTouchGesture();    // tužka má vždy přednost před prsty a dlaní
+    penId = e.pointerId;
+    try { stage.setPointerCapture(e.pointerId); } catch (err) { }
     penDown(e);
   }
   function penDown(e) {
@@ -698,7 +755,8 @@ const Editor = (() => {
     if (tool === 'pen' || tool === 'hl') {
       if (!p) return;
       const t = tool === 'pen' ? T.pen : T.hl, pen = e.pointerType === 'pen', pr = pen ? clamp(e.pressure || 0.25, 0.02, 1) : 0.25, [ox, oy] = origin(p);
-      E.act = { type: 'stroke', page: p, k: tool === 'pen' ? 'p' : 'h', c: curColor(t), w: t.widths[t.wi], d: t.dash, pr: tool === 'pen' && pen && App.settings.pressure, raw: [wx - ox, wy - oy, pr], fx: wx - ox, fy: wy - oy, fp: pr, pen };
+      E.act = { type: 'stroke', page: p, k: tool === 'pen' ? 'p' : 'h', c: curColor(t), w: t.widths[t.wi], d: t.dash, pr: tool === 'pen' && pen && App.settings.pressure, raw: [wx - ox, wy - oy, pr], fx: wx - ox, fy: wy - oy, fp: pr, pen, hx: sx, hy: sy };
+      armHold(E.act);
       requestLive();
     } else if (tool === 'eraser') {
       E.act = { type: 'erase', R: T.er.sizes[T.er.si] / 2, sx, sy, wx, wy, began: false };
@@ -711,6 +769,25 @@ const Editor = (() => {
       if (p) E.act = { type: 'textbox', page: p, x0: sx, y0: sy, x1: sx, y1: sy };
     }
   }
+  /* podržení tužky na konci tahu → rozpoznání tvaru */
+  function armHold(a) { clearTimeout(a.holdT); a.holdT = setTimeout(() => holdFire(a), 480); }
+  function holdFire(a) {
+    if (E.act !== a || a.shape) return;
+    const raw = a.raw.slice();
+    if (a.ex != null && Math.hypot(a.ex - a.fx, a.ey - a.fy) > 0.05) raw.push(a.ex, a.ey, a.fp);
+    const sh = Shapes.detect(raw, a.w, 22 / E.view.s);
+    if (!sh) return;
+    a.shape = a.shapeCur = sh;
+    a.p0 = [raw[raw.length - 3], raw[raw.length - 2]];
+    requestLive();
+  }
+  function shapeAdjust(a, sx, sy) { // dokud tužka drží, tvar jde natáhnout / otočit kolem výchozího bodu
+    if (!a.adj && Math.hypot(sx - a.hx, sy - a.hy) < 7) return;
+    a.adj = true;
+    const [wx, wy] = s2w(sx, sy), [ox, oy] = origin(a.page);
+    a.shapeCur = Shapes.adjust(a.shape, a.p0, [wx - ox, wy - oy]);
+  }
+  const shapeItem = a => ({ t: 's', id: uid(), k: a.k, c: a.c, w: a.w, d: a.d, sp: a.shapeCur.kind, pts: encPts(Shapes.points(a.shapeCur)) });
   function strokeAdd(a, e) {
     const [wx, wy] = s2w(e.clientX, e.clientY), [ox, oy] = origin(a.page), lx = wx - ox, ly = wy - oy;
     const pr = a.pen ? clamp(e.pressure || a.fp, 0.02, 1) : 0.25;
@@ -729,7 +806,8 @@ const Editor = (() => {
       let ch = false;
       const out = [];
       for (const it of p.items) {
-        const r = it.t === 's' ? eraseStroke(it, lx, ly, a.R) : null;
+        let r = null;
+        if (it.t === 's' && !it.locked) r = T.er.whole ? (itemHitsPoint(it, lx, ly, a.R) ? [] : null) : eraseStroke(it, lx, ly, a.R);
         if (r) { ch = true; out.push(...r); } else out.push(it);
       }
       if (ch) { if (!a.began) { txBegin(); a.began = true; } touch(p); p.items = out; any = true; }
@@ -762,10 +840,15 @@ const Editor = (() => {
       return;
     }
     if (e.pointerId !== penId || !E.act) return;
+    lastPen = performance.now();
     const a = E.act, [sx, sy] = xy(e);
     if (a.type === 'stroke') {
-      const evs = e.getCoalescedEvents ? e.getCoalescedEvents() : [];
-      (evs.length ? evs : [e]).forEach(ev => strokeAdd(a, ev));
+      if (a.shape) shapeAdjust(a, sx, sy);
+      else {
+        const evs = e.getCoalescedEvents ? e.getCoalescedEvents() : [];
+        (evs.length ? evs : [e]).forEach(ev => strokeAdd(a, ev));
+        if (Math.hypot(sx - a.hx, sy - a.hy) > 5) { a.hx = sx; a.hy = sy; armHold(a); }
+      }
       requestLive();
     } else if (a.type === 'erase') {
       const [wx, wy] = s2w(sx, sy), dist = Math.hypot(wx - a.wx, wy - a.wy), n = Math.max(1, Math.ceil(dist / (a.R * 0.6)));
@@ -785,10 +868,11 @@ const Editor = (() => {
   function onUp(e) {
     if (e.pointerType === 'touch') {
       if (!touches.delete(e.pointerId) || !gest) return;
+      if (e.type === 'pointercancel') gest.cancelled = true; // zrušený dotyk (např. dlaň) se nikdy nepočítá jako ťuknutí
       if (gest.mode === 'sel' && E.act && E.act.type === 'xform' && E.act.ptr === e.pointerId) { xformEnd(); }
       if (touches.size) return;
       const g = gest; gest = null;
-      const quick = performance.now() - g.t0 < 380 && !g.moved;
+      const quick = !g.cancelled && performance.now() - g.t0 < 380 && !g.moved && performance.now() - lastPen > 700;
       if (g.mode === 'crop') return;
       if (quick && g.max === 2) return undo();
       if (quick && g.max === 3) return redo();
@@ -808,15 +892,24 @@ const Editor = (() => {
       return;
     }
     if (e.pointerId !== penId) return;
+    lastPen = performance.now();
+    penFinish();
+  }
+  function penFinish() {
     penId = null;
     const a = E.act;
     if (!a) return;
     if (a.type === 'xform') return xformEnd();
     E.act = null;
     if (a.type === 'stroke') {
-      if (a.ex != null && Math.hypot(a.ex - a.fx, a.ey - a.fy) > 0.05) a.raw.push(a.ex, a.ey, a.fp);
-      const it = { t: 's', id: uid(), k: a.k, c: a.c, w: a.w, d: a.d, pts: encPts(simplify(a.raw, clamp(0.25 / E.view.s, 0.03, 0.15))) };
-      if (a.pr) it.pr = 1;
+      clearTimeout(a.holdT);
+      let it;
+      if (a.shape) it = shapeItem(a);
+      else {
+        if (a.ex != null && Math.hypot(a.ex - a.fx, a.ey - a.fy) > 0.05) a.raw.push(a.ex, a.ey, a.fp);
+        it = { t: 's', id: uid(), k: a.k, c: a.c, w: a.w, d: a.d, pts: encPts(simplify(a.raw, clamp(0.25 / E.view.s, 0.03, 0.15))) };
+        if (a.pr) it.pr = 1;
+      }
       txBegin(); touch(a.page); a.page.items = [...a.page.items, it]; txCommit();
       drawOne(a.page, it);
       lctx.setTransform(1, 0, 0, 1, 0, 0); lctx.clearRect(0, 0, live.width, live.height);
@@ -824,7 +917,15 @@ const Editor = (() => {
       if (a.began) txCommit();
       if (T.er.auto) setTool(E.prevTool || 'pen');
       render();
-    } else if (a.type === 'region') { regionEnd(a); drawLive(); }
+    } else if (a.type === 'region') {
+      regionEnd(a); drawLive();
+      if (a.mode !== 'box' && a.pts.length > 3) { // krátce ukáže uzavřený obrys
+        lctx.setTransform(E.dpr, 0, 0, E.dpr, 0, 0);
+        lctx.strokeStyle = '#3d8fe6'; lctx.lineWidth = 1.5; lctx.setLineDash([6, 5]);
+        lctx.beginPath(); a.pts.forEach((p, i) => i ? lctx.lineTo(p[0], p[1]) : lctx.moveTo(p[0], p[1])); lctx.closePath(); lctx.stroke(); lctx.setLineDash([]);
+        setTimeout(() => { if (!E.act) drawLive(); }, 180);
+      }
+    }
     else if (a.type === 'textedit') editText(a.page, a.it);
     else if (a.type === 'textbox') {
       const [w0x, w0y] = s2w(Math.min(a.x0, a.x1), Math.min(a.y0, a.y1)), [ox, oy] = origin(a.page);
@@ -840,7 +941,7 @@ const Editor = (() => {
     if (E.crop) return;
     const [wx, wy] = s2w(sx, sy);
     if (E.sel) { if (selHit(sx, sy)) { E.sel.menu = !E.sel.menu; return updateOverlay(); } setSel(null); }
-    const h = hitItem(wx, wy, false);
+    const h = hitItem(wx, wy, 'sp'); // prstem jde vybrat obrázek, text a rozpoznaný tvar
     if (h) return setSel([h], true);
     if (clip && pageAt(wx, wy)) showMenu({ x: sx, y: sy - 6 }, [{ icon: 'paste', label: 'Vložit', action: () => pasteAt(wx, wy) }], { cls: 'dark', align: 'center' });
   }
@@ -1067,6 +1168,8 @@ const Editor = (() => {
     stage.addEventListener('pointercancel', onUp);
     stage.addEventListener('wheel', onWheel, { passive: false });
     stage.addEventListener('contextmenu', e => e.preventDefault());
+    // iPad: bez tohohle Safari u rychlých tahů tužkou čeká na dvojité ťuknutí / Scribble a tahy zahazuje
+    for (const t of ['touchstart', 'touchmove', 'touchend']) stage.addEventListener(t, e => { if (e.cancelable) e.preventDefault(); }, { passive: false });
     for (const g of ['gesturestart', 'gesturechange']) document.addEventListener(g, e => e.preventDefault());
     document.addEventListener('keydown', onKey);
     window.addEventListener('resize', resize);

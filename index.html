@@ -34,12 +34,14 @@
   </main>
 </div>
 
+<div id="dropline" hidden></div>
 <div id="editor" hidden>
   <div id="stage"><canvas id="cv"></canvas><canvas id="live"></canvas></div>
   <div id="overlay">
     <div id="selframe" hidden><i class="h tl"></i><i class="h tr"></i><i class="h br"></i><i class="h bl"></i><i class="rot"></i></div>
     <div id="cropframe" hidden><i class="c tl"></i><i class="c tr"></i><i class="c br"></i><i class="c bl"></i><i class="e et"></i><i class="e er"></i><i class="e eb"></i><i class="e el"></i>
       <div class="crop-btns"><button id="crop-no" title="Zrušit ořez"></button><button id="crop-ok" title="Potvrdit ořez"></button></div></div>
+    <i id="lh1" class="lh" hidden></i><i id="lh2" class="lh" hidden></i>
     <div id="selmenu" hidden></div>
     <button id="addpage"><span>Přidat stránku</span></button>
   </div>
@@ -68,6 +70,7 @@
 <script src="js/util.js"></script>
 <script src="js/db.js"></script>
 <script src="js/geom.js"></script>
+<script src="js/shapes.js"></script>
 <script src="js/text.js"></script>
 <script src="js/render.js"></script>
 <script src="js/pdfio.js"></script>
