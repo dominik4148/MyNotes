@@ -137,7 +137,9 @@ const Editor = (() => {
       lctx.save();
       clipPages(lctx, visible().map(i => E.pages[i]));
       pageTf(lctx, a.page);
-      Render.drawItem(lctx, a.shape ? shapeItem(a) : { t: 's', k: a.k, c: a.c, w: a.w, d: a.d, pr: a.pr, pts: encPts(a.raw) }, dark);
+      let pts = a.raw; // konec čáry se při kreslení dotáhne až ke hrotu tužky, aby vyhlazení nebylo vidět jako zpoždění
+      if (!a.shape && a.ex != null && Math.hypot(a.ex - a.fx, a.ey - a.fy) > 0.05) pts = a.raw.concat(a.ex, a.ey, a.fp);
+      Render.drawItem(lctx, a.shape ? shapeItem(a) : { t: 's', k: a.k, c: a.c, w: a.w, d: a.d, pr: a.pr, pts: encPts(pts) }, dark);
       lctx.restore();
     } else if (a.type === 'erase') {
       lctx.beginPath(); lctx.arc(a.sx, a.sy, Math.max(3, a.R * v.s), 0, 7);
@@ -788,14 +790,25 @@ const Editor = (() => {
     a.shapeCur = Shapes.adjust(a.shape, a.p0, [wx - ox, wy - oy]);
   }
   const shapeItem = a => ({ t: 's', id: uid(), k: a.k, c: a.c, w: a.w, d: a.d, sp: a.shapeCur.kind, pts: encPts(Shapes.points(a.shapeCur)) });
+  /* vyhlazení vstupu (filtr „1 €“): při pomalém pohybu, kde je vidět chvění ruky, vyhlazuje silně,
+     při rychlém psaní slabě, takže čára za tužkou nezaostává */
+  const F_MIN = 3, F_BETA = 0.03, fAlpha = (dt, fc) => 1 / (1 + 1 / (2 * Math.PI * fc * dt));
   function strokeAdd(a, e) {
     const [wx, wy] = s2w(e.clientX, e.clientY), [ox, oy] = origin(a.page), lx = wx - ox, ly = wy - oy;
     const pr = a.pen ? clamp(e.pressure || a.fp, 0.02, 1) : 0.25;
-    a.fx += (lx - a.fx) * 0.72; a.fy += (ly - a.fy) * 0.72; a.fp += (pr - a.fp) * 0.3;
-    const n = a.raw.length, md = 0.45 / E.view.s;
+    const t = e.timeStamp || performance.now();
+    if (a.ft == null) { a.ft = t - 8; a.vx = a.vy = 0; a.rx = a.fx; a.ry = a.fy; }
+    const dt = clamp((t - a.ft) / 1000, 0.001, 0.05), s = E.view.s;
+    a.ft = t;
+    const ad = fAlpha(dt, 1);
+    a.vx += ((lx - a.rx) * s / dt - a.vx) * ad; a.vy += ((ly - a.ry) * s / dt - a.vy) * ad;
+    a.rx = lx; a.ry = ly;
+    const al = fAlpha(dt, F_MIN + F_BETA * Math.hypot(a.vx, a.vy));
+    a.fx += (lx - a.fx) * al; a.fy += (ly - a.fy) * al; a.fp += (pr - a.fp) * fAlpha(dt, 5);
+    a.ex = lx; a.ey = ly;
+    const n = a.raw.length, md = 0.6 / s;
     if (Math.hypot(a.fx - a.raw[n - 3], a.fy - a.raw[n - 2]) < md) return;
     a.raw.push(a.fx, a.fy, a.fp);
-    a.ex = lx; a.ey = ly;
   }
   function eraseAt(wx, wy) {
     const a = E.act;
