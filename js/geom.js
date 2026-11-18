@@ -58,37 +58,6 @@ function densify(X, Y, P, d) {
   return { X: x, Y: y, P: p };
 }
 
-/* prostorové vyhlazení: body přerozdělí po délce čáry rovnoměrně (krok h) a několikrát zprůměruje sousedy.
-   Odstraní drobné chvění ruky, ale nepřidává žádné zpoždění za tužkou. Konce tahu zůstávají na místě. */
-function smoothPath(X, Y, P, h, passes) {
-  const n = X.length;
-  if (n < 3) return { X, Y, P };
-  const x = [X[0]], y = [Y[0]], p = [P[0]];
-  let carry = 0;
-  for (let i = 1; i < n; i++) {
-    const dx = X[i] - X[i - 1], dy = Y[i] - Y[i - 1], l = Math.hypot(dx, dy);
-    if (l < 1e-9) continue;
-    let t = h - carry;
-    while (t <= l) { const f = t / l; x.push(X[i - 1] + dx * f); y.push(Y[i - 1] + dy * f); p.push(P[i - 1] + (P[i] - P[i - 1]) * f); t += h; }
-    carry = l - (t - h);
-  }
-  if (Math.hypot(x[x.length - 1] - X[n - 1], y[y.length - 1] - Y[n - 1]) > h * 0.25) { x.push(X[n - 1]); y.push(Y[n - 1]); p.push(P[n - 1]); }
-  else { x[x.length - 1] = X[n - 1]; y[y.length - 1] = Y[n - 1]; }
-  const m = x.length;
-  if (m < 4) return { X: x, Y: y, P: p };
-  for (let k = 0; k < passes; k++) {
-    let ax = x[0], ay = y[0], ap = p[0];
-    for (let i = 1; i < m - 1; i++) {
-      const cx = x[i], cy = y[i], cp = p[i];
-      x[i] = 0.25 * ax + 0.5 * cx + 0.25 * x[i + 1];
-      y[i] = 0.25 * ay + 0.5 * cy + 0.25 * y[i + 1];
-      p[i] = 0.25 * ap + 0.5 * cp + 0.25 * p[i + 1];
-      ax = cx; ay = cy; ap = cp;
-    }
-  }
-  return { X: x, Y: y, P: p };
-}
-
 function circleCmds(c, cx, cy, r) {
   const k = 0.5523 * r;
   c.push(0, r2(cx + r), r2(cy),
@@ -170,10 +139,6 @@ function closedCmds(X, Y) {
 function outlineCmds(X, Y, P, w) {
   const n = X.length, R = new Array(n), c = [];
   for (let i = 0; i < n; i++) R[i] = (w / 2) * (0.55 + 0.9 * Math.sqrt(P[i]));
-  for (let k = 0; k < 2 && n > 2; k++) { // plynulé změny tloušťky, okraje čáry pak nejsou zvlněné
-    let prev = R[0];
-    for (let i = 1; i < n - 1; i++) { const cur = R[i]; R[i] = 0.25 * prev + 0.5 * cur + 0.25 * R[i + 1]; prev = cur; }
-  }
   if (n === 1) { circleCmds(c, X[0], Y[0], Math.max(R[0], w / 2)); return c; }
   let a = 0;
   for (let i = 1; i < n - 1; i++) {
@@ -197,7 +162,7 @@ function strokeGeom(it) {
   if (it.sp && Shapes.STRAIGHT[it.sp]) cmds = polyCmds(d0.X, d0.Y);
   else if (it.sp === 'ell' && d0.n > 8) cmds = closedCmds(d0.X, d0.Y);
   else {
-    const d = smoothPath(d0.X, d0.Y, d0.P, 0.5, 6);
+    const d = densify(d0.X, d0.Y, d0.P, Math.max(0.8, it.w * 0.75));
     cmds = fill ? outlineCmds(d.X, d.Y, d.P, it.w) : centerCmds(d.X, d.Y);
   }
   const m = it.w * (fill ? 0.8 : 0.5) + 0.5;
